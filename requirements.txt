@@ -1,0 +1,5 @@
+tkcalendar==1.6.1
+python-telegram-bot==22.8
+pystray==0.19.5
+Pillow==13.0.0
+babel==2.18.0
