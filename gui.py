@@ -1,28 +1,23 @@
 """Tkinter GUI for Task Reminder in Todoist-like style.
-
 The module provides:
-- TaskFilterBar: top filter buttons (All / Today / Tomorrow / By date).
-- ProjectSidebar: left panel listing projects with add/remove/move buttons.
-- TaskListView: right panel listing tasks for the selected project.
-- MainWindow: assembles the layout and wires callbacks.
-
+TaskFilterBar: top filter buttons (All / Today / Tomorrow / By date).
+ProjectSidebar: left panel listing projects with add/remove/move buttons.
+TaskListView: right panel listing tasks for the selected project.
+MainWindow: assembles the layout and wires callbacks.
 All date/time values are stored in UTC; local time is used for display.
 """
-
 from __future__ import annotations
-
 import tkinter as tk
 from datetime import datetime, timezone
+from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 from typing import Any, Callable
-
 from db import DatabaseManager, Project, Task, TaskLimitExceeded, TaskStatus
 from ui.datetime_picker import DateTimePicker, local_to_utc
 
 
 class TaskFilterBar(ttk.Frame):
     """Top bar with task filter buttons."""
-
     FILTERS = {
         "all": "Все задачи",
         "today": "Сегодня",
@@ -39,7 +34,6 @@ class TaskFilterBar(ttk.Frame):
         self.on_filter_changed = on_filter_changed
         self._buttons: dict[str, ttk.Button] = {}
         self._selected = "all"
-
         for key, label in self.FILTERS.items():
             btn = ttk.Button(
                 self,
@@ -48,14 +42,11 @@ class TaskFilterBar(ttk.Frame):
             )
             btn.pack(side=tk.LEFT, padx=2)
             self._buttons[key] = btn
-
         self._update_style()
 
     def _select_filter(self, key: str) -> None:
         selected_date: datetime | None = None
         if key == "date":
-            # Will be replaced by DateTimePicker integration in Step 3.
-            # For now we open a simple date dialog.
             selected_date = self._ask_date()
             if selected_date is None:
                 return
@@ -80,7 +71,6 @@ class TaskFilterBar(ttk.Frame):
 
 class ProjectSidebar(ttk.Frame):
     """Left sidebar showing projects."""
-
     def __init__(
         self,
         parent: tk.Widget,
@@ -92,11 +82,9 @@ class ProjectSidebar(ttk.Frame):
         self.db = db
         self.on_project_selected = on_project_selected
         self._selected_project_id: int | None = None
-
         ttk.Label(self, text="Проекты", font=("Segoe UI", 14, "bold")).pack(
             anchor=tk.W, pady=(0, 10)
         )
-
         btn_frame = ttk.Frame(self)
         btn_frame.pack(fill=tk.X, pady=5)
         ttk.Button(btn_frame, text="+", width=3, command=self._add_project).pack(
@@ -111,7 +99,6 @@ class ProjectSidebar(ttk.Frame):
         ttk.Button(
             btn_frame, text="↓", width=3, command=self._move_project_down
         ).pack(side=tk.LEFT, padx=2)
-
         self.listbox = tk.Listbox(
             self,
             selectmode=tk.SINGLE,
@@ -126,7 +113,6 @@ class ProjectSidebar(ttk.Frame):
         )
         self.listbox.pack(fill=tk.BOTH, expand=True, pady=5)
         self.listbox.bind("<<ListboxSelect>>", self._on_select)
-
         self.refresh()
 
     def refresh(self) -> None:
@@ -190,7 +176,6 @@ class ProjectSidebar(ttk.Frame):
 
 class TaskListView(ttk.Frame):
     """Right panel showing tasks for the selected project."""
-
     def __init__(
         self,
         parent: tk.Widget,
@@ -203,11 +188,9 @@ class TaskListView(ttk.Frame):
         self._project_id: int | None = None
         self._filter = "all"
         self._filter_date: datetime | None = None
-
         ttk.Label(self, text="Задачи", font=("Segoe UI", 14, "bold")).pack(
             anchor=tk.W, pady=(0, 10)
         )
-
         btn_frame = ttk.Frame(self)
         btn_frame.pack(fill=tk.X, pady=5)
         ttk.Button(btn_frame, text="+", width=3, command=self._add_task).pack(
@@ -222,7 +205,6 @@ class TaskListView(ttk.Frame):
         ttk.Button(btn_frame, text="↓", width=3, command=self._move_task_down).pack(
             side=tk.LEFT, padx=2
         )
-
         self.tree = ttk.Treeview(
             self,
             columns=("status", "name", "due"),
@@ -236,8 +218,6 @@ class TaskListView(ttk.Frame):
         self.tree.column("name", width=300)
         self.tree.column("due", width=150)
         self.tree.pack(fill=tk.BOTH, expand=True, pady=5)
-
-        # Checkbox column uses a button-like cell; we'll render status text for now.
         self.tree.bind("<Double-1>", self._toggle_status)
 
     def set_project(self, project_id: int | None) -> None:
@@ -252,10 +232,8 @@ class TaskListView(ttk.Frame):
     def refresh(self) -> None:
         for item in self.tree.get_children():
             self.tree.delete(item)
-
         if self._project_id is None:
             return
-
         if self._filter == "today":
             tasks = self.db.get_tasks_for_today(self._project_id)
         elif self._filter == "tomorrow":
@@ -264,7 +242,6 @@ class TaskListView(ttk.Frame):
             tasks = self.db.get_tasks_for_date(self._filter_date, self._project_id)
         else:
             tasks = self.db.get_tasks_by_project(self._project_id)
-
         for task in tasks:
             status_text = "✓" if task.status == TaskStatus.DONE else "☐"
             due_local = task.due_date_utc.astimezone()
@@ -356,32 +333,32 @@ class TaskListView(ttk.Frame):
 
 class MainWindow:
     """Main application window."""
-
-    def __init__(self, db: DatabaseManager) -> None:
+    def __init__(self, db: DatabaseManager, root: tk.Tk) -> None:
         self.db = db
-        self.root = tk.Tk()
+        self.root = root
         self.root.title("Task Reminder")
         self.root.geometry("900x600")
         self.root.configure(bg="#ffffff")
-
+        
+        # ✅ ИСПРАВЛЕНО: правильный путь к иконке
+        icon_path = Path(__file__).parent / "assets" / "icon.ico"
+        if icon_path.exists():
+            self.root.iconbitmap(str(icon_path))
+        
         self._setup_styles()
-
         self.filter_bar = TaskFilterBar(
             self.root,
             on_filter_changed=self._on_filter_changed,
         )
         self.filter_bar.pack(fill=tk.X, side=tk.TOP)
-
         self.paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         self.paned.pack(fill=tk.BOTH, expand=True)
-
         self.sidebar = ProjectSidebar(
             self.paned,
             db=self.db,
             on_project_selected=self._on_project_selected,
         )
         self.paned.add(self.sidebar, weight=1)
-
         self.task_view = TaskListView(
             self.paned,
             db=self.db,
@@ -412,7 +389,7 @@ class MainWindow:
 
 
 if __name__ == "__main__":
-    # Minimal standalone launch for development / manual testing.
     db = DatabaseManager("tasks.db")
-    app = MainWindow(db)
+    root = tk.Tk()
+    app = MainWindow(db, root)
     app.run()

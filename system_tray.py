@@ -1,101 +1,51 @@
 """System tray integration and Windows startup management.
-
 Provides:
-- TrayIcon: runs pystray in a background thread, supports Show/Exit menu.
-- StartupManager: adds/removes the application from the Windows registry
-  run key (HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run), with a
-  mockable registry backend for tests.
+- create_app_icon(): auto-generates icon if missing
+- TrayIcon: runs pystray in a background thread, supports Show/Exit menu
+- TrayController: wires the tray icon to a Tkinter window
+- StartupManager: adds/removes the application from Windows registry run key
 """
-
 from __future__ import annotations
-
 import threading
 import tkinter as tk
 from pathlib import Path
-from typing import Callable
-
-import pystray
+from typing import Any, Callable
 from PIL import Image, ImageDraw
 
+try:
+    import pystray
+except ImportError:
+    pystray = None
 
-class StartupManager:
-    """Manages Windows registry autostart entry for the application."""
 
-    REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-    VALUE_NAME = "TaskReminder"
-
-    def __init__(self, app_path: str | Path, registry_backend: Any | None = None) -> None:
-        self.app_path = str(Path(app_path).resolve())
-        self._registry = registry_backend
-
-    def _open_registry(self) -> Any:
-        if self._registry is not None:
-            return self._registry.OpenKey(
-                None, self.REG_KEY, 0, 0
-            )
-        import winreg
-
-        return winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            self.REG_KEY,
-            0,
-            winreg.KEY_SET_VALUE | winreg.KEY_QUERY_VALUE | winreg.KEY_DELETE,
-        )
-
-    def _close_key(self, key: Any) -> None:
-        close = getattr(key, "Close", None)
-        if callable(close):
-            close()
-
-    def is_enabled(self) -> bool:
-        key = self._open_registry()
-        try:
-            value, _ = self._registry.QueryValueEx(key, self.VALUE_NAME)
-            return value == self.app_path
-        except Exception:
-            return False
-        finally:
-            self._close_key(key)
-
-    def enable(self) -> None:
-        key = self._open_registry()
-        try:
-            if self._registry is None:
-                import winreg
-
-                winreg.SetValueEx(
-                    key, self.VALUE_NAME, 0, winreg.REG_SZ, self.app_path
-                )
-            else:
-                self._registry.SetValueEx(
-                    key, self.VALUE_NAME, 0, 1, self.app_path
-                )
-        finally:
-            self._close_key(key)
-
-    def disable(self) -> None:
-        key = self._open_registry()
-        try:
-            if self._registry is None:
-                import winreg
-
-                try:
-                    winreg.DeleteValue(key, self.VALUE_NAME)
-                except FileNotFoundError:
-                    pass
-            else:
-                self._registry.DeleteValue(key, self.VALUE_NAME)
-        finally:
-            self._close_key(key)
-
-    # ------------------------------------------------------------------
-    # TrayIcon
-    # ------------------------------------------------------------------
+def create_app_icon() -> Path:
+    """Create app icon programmatically if it doesn't exist."""
+    assets_dir = Path(__file__).parent / "assets"
+    assets_dir.mkdir(exist_ok=True)
+    
+    icon_path = assets_dir / "icon.ico"
+    
+    if icon_path.exists():
+        return icon_path
+    
+    # Create a 256x256 icon with Todoist-like red color
+    img = Image.new('RGBA', (256, 256), (228, 67, 50, 255))
+    draw = ImageDraw.Draw(img)
+    
+    # Draw white checkmark
+    draw.polygon([(70, 140), (110, 180), (190, 90)], fill='white')
+    draw.polygon([(110, 180), (130, 180), (190, 120), (170, 100)], fill='white')
+    
+    # Save as ICO with multiple sizes
+    img.save(icon_path, sizes=[(16, 16), (32, 32), (48, 48), (256, 256)])
+    print(f"✅ Icon created: {icon_path}")
+    
+    return icon_path
 
 
 class TrayIcon:
-    """System tray icon with Show and Exit menu items."""
-
+    """System tray icon with Show and Exit menu items using pystray."""
+    
     def __init__(
         self,
         on_show: Callable[[], None],
@@ -103,78 +53,56 @@ class TrayIcon:
     ) -> None:
         self.on_show = on_show
         self.on_exit = on_exit
-        self.icon: pystray.Icon | None = None
+        self.icon: Any | None = None
         self._thread: threading.Thread | None = None
-
-    def _create_image(self) -> Image.Image:
-        width = 64
-        height = 64
-        image = Image.new("RGB", (width, height), "white")
-        dc = ImageDraw.Draw(image)
-        dc.rectangle([0, 0, width, height], fill="#e44332")
-        dc.text((width // 2 - 10, height // 2 - 14), "T", fill="white")
-        return image
-
-    def _setup_menu(self) -> pystray.Menu:
-        return pystray.Menu(
-            pystray.MenuItem("Показать окно", self._show),
-            pystray.MenuItem("Выход", self._exit),
-        )
-
-    def _show(self, _icon: pystray.Icon) -> None:
-        self.on_show()
-
-    def _exit(self, _icon: pystray.Icon) -> None:
-        self.on_exit()
-        if self.icon is not None:
-            self.icon.stop()
-
+        self._stop_event = threading.Event()
+    
+    def _get_icon_image(self) -> Image.Image:
+        """Load or create icon image."""
+        icon_path = create_app_icon()
+        return Image.open(icon_path)
+    
     def _run(self) -> None:
-        self.icon = pystray.Icon(
-            "task_reminder",
-            self._create_image(),
-            "Task Reminder",
-            menu=self._setup_menu(),
+        if pystray is None:
+            print("❌ pystray not installed")
+            return
+        
+        menu = pystray.Menu(
+            pystray.MenuItem("Показать окно", lambda: self.on_show()),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Выход", lambda: self.on_exit()),
         )
+        
+        icon_image = self._get_icon_image()
+        
+        self.icon = pystray.Icon(
+            "Task Reminder",
+            icon_image,
+            menu=menu,
+        )
+        
         self.icon.run()
-
+    
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
+        self._stop_event.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
-
+    
     def stop(self) -> None:
+        self._stop_event.set()
         if self.icon is not None:
-            self.icon.stop()
+            try:
+                self.icon.stop()
+            except Exception:
+                pass
         if self._thread is not None:
             self._thread.join(timeout=2)
 
 
 class TrayController:
     """Wires the tray icon to a Tkinter window."""
-
+    
     def __init__(self, root: tk.Tk, on_exit: Callable[[], None]) -> None:
-        self.root = root
-        self.on_exit = on_exit
-        self.tray = TrayIcon(on_show=self.show_window, on_exit=self.exit_app)
-
-    def start(self) -> None:
-        self.tray.start()
-
-    def stop(self) -> None:
-        self.tray.stop()
-
-    def show_window(self) -> None:
-        self.root.deiconify()
-        self.root.lift()
-
-    def hide_window(self) -> None:
-        self.root.withdraw()
-
-    def exit_app(self) -> None:
-        self.on_exit()
-
-    def on_close_button(self) -> None:
-        """Call this from WM_DELETE_WINDOW to hide instead of close."""
-        self.hide_window()
+        self.root =
